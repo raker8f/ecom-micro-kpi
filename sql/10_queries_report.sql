@@ -1,4 +1,48 @@
 -- 1) 月度 KPI：訂單數、營收、客單價
+WITH paid AS (
+SELECT o.OrderId, o.OrderDate, o.CustomerId,
+SUM(oi.Qty*oi.UnitPrice - oi.Discount) AS amount
+FROM dbo.Orders o
+JOIN dbo.OrderItems oi ON oi.OrderId = o.OrderId
+WHERE o.OrderStatus='PAID'
+GROUP BY o.OrderId, o.OrderDate, o.CustomerId
+)
+SELECT FORMAT(OrderDate,'yyyy-MM') AS ym,
+COUNT(*) AS orders,
+SUM(amount) AS revenue,
+AVG(amount) AS aov
+FROM paid
+GROUP BY FORMAT(OrderDate,'yyyy-MM')
+ORDER BY ym;
+
+
+-- 2) 類別銷售 Top-N（每月前 3 名商品）
+WITH amt AS (
+SELECT FORMAT(o.OrderDate,'yyyy-MM') ym, p.Category, p.Name,
+SUM(oi.Qty*oi.UnitPrice - oi.Discount) amt
+FROM dbo.Orders o
+JOIN dbo.OrderItems oi ON oi.OrderId=o.OrderId
+JOIN dbo.Products p ON p.ProductId=oi.ProductId
+WHERE o.OrderStatus='PAID'
+GROUP BY FORMAT(o.OrderDate,'yyyy-MM'), p.Category, p.Name
+), r AS (
+SELECT *, ROW_NUMBER() OVER(PARTITION BY ym, Category ORDER BY amt DESC) rn
+FROM amt
+)
+SELECT * FROM r WHERE rn <= 3 ORDER BY ym, Category, rn;
+
+
+-- 3) RFM：最近一次消費/頻率/金額切分
+WITH paid AS (
+SELECT o.CustomerId,
+MAX(o.OrderDate) AS recent,
+COUNT(DISTINCT o.OrderId) AS freq,
+SUM(oi.Qty*oi.UnitPrice - oi.Discount) AS money
+FROM dbo.Orders o
+JOIN dbo.OrderItems oi ON oi.OrderId=o.OrderId
+WHERE o.OrderStatus='PAID'
+GROUP BY o.CustomerId
+)
 SELECT c.CustomerId, c.Email,
 DATEDIFF(DAY, recent, SYSUTCDATETIME()) AS recency_days,
 freq, money,
@@ -6,14 +50,12 @@ NTILE(5) OVER(ORDER BY -freq) AS F_bucket,
 NTILE(5) OVER(ORDER BY -money) AS M_bucket
 FROM paid JOIN dbo.Customers c ON c.CustomerId=paid.CustomerId;
 
-
 -- 4) 滾動 7 天營收移動平均（使用 Indexed View 加速）
 SELECT SalesDate,
 Revenue,
 AVG(Revenue) OVER(ORDER BY SalesDate ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS MA7
 FROM dbo.v_DailySales
 ORDER BY SalesDate;
-
 
 -- 5) 客戶 LTV（總金額/客戶）
 SELECT c.CustomerId, c.Email,
